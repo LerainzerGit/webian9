@@ -1,0 +1,93 @@
+name: Build Debian 9 web console and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Debian image
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: site/debian
+          key: debian9-image-v1
+
+      - name: Self-host v86 files
+        run: |
+          mkdir -p site/v86 npm-tmp
+          cd npm-tmp && npm init -y >/dev/null && npm install v86
+          cp node_modules/v86/build/libv86.js node_modules/v86/build/v86.wasm ../site/v86/
+          cd ..
+          curl -fsSL -o site/v86/seabios.bin https://raw.githubusercontent.com/copy/v86/master/bios/seabios.bin
+          curl -fsSL -o site/v86/vgabios.bin https://raw.githubusercontent.com/copy/v86/master/bios/vgabios.bin
+          ls -lh site/v86
+
+      - name: Build Debian 9 (stretch, i386) disk image
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y debootstrap e2fsprogs
+          R=$PWD/rootfs
+          mkdir -p site/debian
+          sudo debootstrap --arch=i386 --variant=minbase --no-check-gpg \
+            --include=linux-image-686,initramfs-tools,systemd-sysv,udev,kmod,iproute2,nano,less,procps,ifupdown,isc-dhcp-client,ca-certificates \
+            stretch "$R" http://archive.debian.org/debian
+          echo webos | sudo tee "$R/etc/hostname"
+          echo '/dev/sda / ext4 defaults,noatime 0 1' | sudo tee "$R/etc/fstab"
+          printf 'deb http://archive.debian.org/debian stretch main\n' | sudo tee "$R/etc/apt/sources.list"
+          echo 'Acquire::Check-Valid-Until "false";' | sudo tee "$R/etc/apt/apt.conf.d/99archive"
+          sudo mkdir -p "$R/etc/systemd/system/getty@tty1.service.d" "$R/etc/initramfs-tools/conf.d"
+          printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin root --noclear %%I $TERM\n' | sudo tee "$R/etc/systemd/system/getty@tty1.service.d/autologin.conf"
+          echo 'RESUME=none' | sudo tee "$R/etc/initramfs-tools/conf.d/resume"
+          sudo chroot "$R" passwd -d root
+          sudo chroot "$R" update-initramfs -u -k all
+          KERNEL=$(basename $(ls "$R"/boot/vmlinuz-* | head -n1))
+          INITRD=$(basename $(ls "$R"/boot/initrd.img-* | head -n1))
+          sudo cp "$R/boot/$KERNEL" site/debian/vmlinuz
+          sudo cp "$R/boot/$INITRD" site/debian/initrd.img
+          sudo chmod 644 site/debian/*
+          sudo chroot "$R" apt-get clean
+          sudo rm -rf "$R"/var/lib/apt/lists/* "$R"/usr/share/doc/* "$R"/usr/share/man/* "$R"/boot/*
+          SIZE_MB=$(( $(sudo du -sm "$R" | cut -f1) + 150 ))
+          truncate -s ${SIZE_MB}M site/debian/debian.img
+          sudo mkfs.ext4 -q -F -d "$R" -L debian9 site/debian/debian.img
+          sudo chown $USER site/debian/debian.img
+          BYTES=$(stat -c %s site/debian/debian.img)
+          printf '{"kernel":"vmlinuz","initrd":"initrd.img","image":"debian.img","size":%s}\n' "$BYTES" > site/debian/manifest.json
+          ls -lh site/debian
+
+      - name: Assemble site
+        run: |
+          cp index.html site/index.html
+          touch site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

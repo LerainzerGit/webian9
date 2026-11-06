@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Debian 9</title>
+<style>
+html,body{margin:0;height:100%;background:#000;color:#ccc;font:14px monospace}
+#scr{height:100%;display:flex;align-items:flex-start;justify-content:center}
+#msg{position:fixed;top:6px;left:8px;z-index:2;color:#8ae234}
+</style></head>
+<body>
+<div id="msg">Loading Debian 9…</div>
+<div id="scr"><div style="white-space:pre;font:14px monospace;line-height:14px"></div><canvas style="display:none"></canvas></div>
+<script src="v86/libv86.js"></script>
+<script>
+(async () => {
+  const msg = document.getElementById('msg');
+  try {
+    const m = await (await fetch('debian/manifest.json')).json();
+    const emu = new V86({
+      wasm_path: 'v86/v86.wasm',
+      memory_size: 512 * 1024 * 1024,
+      vga_memory_size: 8 * 1024 * 1024,
+      screen_container: document.getElementById('scr'),
+      bios: { url: 'v86/seabios.bin' },
+      vga_bios: { url: 'v86/vgabios.bin' },
+      bzimage: { url: 'debian/' + m.kernel },
+      initrd: { url: 'debian/' + m.initrd },
+      hda: { url: 'debian/' + m.image, async: true, size: m.size },
+      cmdline: 'root=/dev/sda rw console=tty0',
+      autostart: true
+    });
+    emu.add_listener('emulator-ready', () => msg.textContent = 'Booting Debian 9… click the screen to type');
+    setTimeout(() => msg.style.display = 'none', 20000);
+  } catch (e) { msg.textContent = 'Error: ' + e.message; }
+})();
+</script>
+</body></html>
