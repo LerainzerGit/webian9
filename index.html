@@ -8,12 +8,18 @@ html,body{margin:0;height:100%;background:#000;color:#ccc;font:14px monospace}
 /* Hidden text field: its only job is to make the Quest on-screen keyboard appear */
 #kb{position:fixed;left:0;bottom:48px;width:100%;height:28px;opacity:.01;border:0;padding:0;
     background:transparent;color:transparent;caret-color:transparent;font-size:16px;z-index:5;resize:none}
+.big{background:#222;color:#fff;border:1px solid #8ae234;border-radius:10px;padding:16px 28px;font:18px monospace;cursor:pointer;min-width:280px}
 #keys{position:fixed;right:8px;bottom:8px;z-index:6;display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 #keys button{background:#222;color:#ddd;border:1px solid #555;border-radius:6px;padding:8px 12px;font:14px monospace;cursor:pointer}
 #keys button.on{background:#8ae234;color:#000}
 </style></head>
 <body>
-<div id="msg">Loading Debian 9…</div>
+<div id="msg"></div>
+<div id="pick" style="position:fixed;inset:0;z-index:9;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+  <div style="font-size:22px;color:#8ae234">Debian 9 in your browser</div>
+  <button class="big" id="goTerm">⌨ Terminal (fast)</button>
+  <button class="big" id="goGui">🖥 Desktop (IceWM, slower)</button>
+</div>
 <div id="scr"><div style="white-space:pre;font:14px monospace;line-height:14px"></div><canvas style="display:none"></canvas></div>
 <textarea id="kb" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="keyboard input"></textarea>
 <div id="keys">
@@ -45,7 +51,8 @@ function showKeyboard(){ kb.focus(); resetField(); }
 
 // Tap/click the screen (or the button) -> focus the hidden field -> Quest keyboard pops up.
 // focus() must run inside the click handler (a user gesture) or the browser won't open the keyboard.
-document.getElementById('scr').addEventListener('click', showKeyboard);
+let GUI = false;
+document.getElementById('scr').addEventListener('click', () => { if (!GUI) showKeyboard(); }); // in desktop mode use the Keyboard button so taps/clicks reach the mouse
 document.getElementById('bKb').addEventListener('click', showKeyboard);
 
 kb.addEventListener('focus', () => { if (emu) emu.keyboard_set_status(false); resetField(); }); // we feed keys ourselves
@@ -79,26 +86,29 @@ kb.addEventListener('keydown', e => {
   document.getElementById(id).addEventListener('click', () => { send(SC[k]); }));
 document.getElementById('bCtrl').addEventListener('click', () => setCtrl(!ctrl));
 
-(async () => {
+async function boot(gui) {
+  GUI = gui; document.getElementById('pick').style.display = 'none';
   const msg = document.getElementById('msg');
   try {
     const m = await (await fetch('debian/manifest.json')).json();
     emu = new V86({
       wasm_path: 'v86/v86.wasm',
-      memory_size: 512 * 1024 * 1024,
-      vga_memory_size: 8 * 1024 * 1024,
+      memory_size: (gui ? 768 : 512) * 1024 * 1024,
+      vga_memory_size: 16 * 1024 * 1024,
       screen_container: document.getElementById('scr'),
       bios: { url: 'v86/seabios.bin' },
       vga_bios: { url: 'v86/vgabios.bin' },
       bzimage: { url: 'debian/' + m.kernel },
       initrd: { url: 'debian/' + m.initrd },
       hda: { url: 'debian/' + m.image, async: true, size: m.size },
-      cmdline: 'root=/dev/sda rw console=tty0',
+      cmdline: 'root=/dev/sda rw console=tty0' + (gui ? ' webian_gui=1' : ''),
       autostart: true
     });
-    emu.add_listener('emulator-ready', () => msg.textContent = 'Booting Debian 9… tap the screen to open the keyboard');
+    emu.add_listener('emulator-ready', () => msg.textContent = gui ? 'Starting desktop… (use ⌨ Keyboard to type, click the screen to use the mouse)' : 'Booting Debian 9… tap the screen to open the keyboard');
     setTimeout(() => msg.style.display = 'none', 20000);
   } catch (e) { msg.textContent = 'Error: ' + e.message; }
-})();
+}
+document.getElementById('goTerm').onclick = () => boot(false);
+document.getElementById('goGui').onclick = () => boot(true);
 </script>
 </body></html>

@@ -26,7 +26,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: site/debian
-          key: debian9-image-v1
+          key: debian9-image-v2-gui
 
       - name: Self-host v86 files
         run: |
@@ -47,7 +47,7 @@ jobs:
           R=$PWD/rootfs
           mkdir -p site/debian
           sudo debootstrap --arch=i386 --variant=minbase --no-check-gpg \
-            --include=linux-image-686,initramfs-tools,systemd-sysv,udev,kmod,iproute2,nano,less,procps,ifupdown,isc-dhcp-client,ca-certificates \
+            --include=linux-image-686,initramfs-tools,systemd-sysv,udev,kmod,iproute2,nano,less,procps,ifupdown,isc-dhcp-client,ca-certificates,xserver-xorg-core,xserver-xorg-input-evdev,xserver-xorg-video-fbdev,xserver-xorg-video-vesa,xinit,x11-xserver-utils,xkb-data,x11-xkb-utils,icewm,xterm,pcmanfm,mousepad,fonts-dejavu-core \
             stretch "$R" http://archive.debian.org/debian
           echo webos | sudo tee "$R/etc/hostname"
           echo '/dev/sda / ext4 defaults,noatime 0 1' | sudo tee "$R/etc/fstab"
@@ -57,6 +57,9 @@ jobs:
           printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin root --noclear %%I $TERM\n' | sudo tee "$R/etc/systemd/system/getty@tty1.service.d/autologin.conf"
           echo 'RESUME=none' | sudo tee "$R/etc/initramfs-tools/conf.d/resume"
           sudo chroot "$R" passwd -d root
+          # Desktop: only starts when the page boots with webian_gui=1; otherwise you get the plain text console
+          printf '[ -f ~/.bashrc ] && . ~/.bashrc\nif [ "$(tty)" = /dev/tty1 ] && grep -q webian_gui=1 /proc/cmdline; then exec startx -- :0 vt1 -nolisten tcp; fi\n' | sudo tee "$R/root/.bash_profile"
+          printf 'xsetroot -solid "#2c001e" &\nexec icewm-session\n' | sudo tee "$R/root/.xinitrc"
           sudo chroot "$R" update-initramfs -u -k all
           KERNEL=$(basename $(ls "$R"/boot/vmlinuz-* | head -n1))
           INITRD=$(basename $(ls "$R"/boot/initrd.img-* | head -n1))
