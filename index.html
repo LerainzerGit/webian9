@@ -5,17 +5,85 @@
 html,body{margin:0;height:100%;background:#000;color:#ccc;font:14px monospace}
 #scr{height:100%;display:flex;align-items:flex-start;justify-content:center}
 #msg{position:fixed;top:6px;left:8px;z-index:2;color:#8ae234}
+/* Hidden text field: its only job is to make the Quest on-screen keyboard appear */
+#kb{position:fixed;left:0;bottom:48px;width:100%;height:28px;opacity:.01;border:0;padding:0;
+    background:transparent;color:transparent;caret-color:transparent;font-size:16px;z-index:5;resize:none}
+#keys{position:fixed;right:8px;bottom:8px;z-index:6;display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+#keys button{background:#222;color:#ddd;border:1px solid #555;border-radius:6px;padding:8px 12px;font:14px monospace;cursor:pointer}
+#keys button.on{background:#8ae234;color:#000}
 </style></head>
 <body>
 <div id="msg">Loading Debian 9…</div>
 <div id="scr"><div style="white-space:pre;font:14px monospace;line-height:14px"></div><canvas style="display:none"></canvas></div>
+<textarea id="kb" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="keyboard input"></textarea>
+<div id="keys">
+  <button id="bKb">⌨ Keyboard</button><button id="bEsc">Esc</button><button id="bTab">Tab</button>
+  <button id="bCtrl">Ctrl</button><button id="bUp">↑</button><button id="bDn">↓</button><button id="bLt">←</button><button id="bRt">→</button>
+</div>
 <script src="v86/libv86.js"></script>
 <script>
+let emu = null;
+const SENTINEL = '  ';                       // keeps Backspace working when the field is "empty"
+const kb = document.getElementById('kb');
+const SC = { Esc:[0x01,0x81], Tab:[0x0F,0x8F], Enter:[0x1C,0x9C], Backspace:[0x0E,0x8E],
+  Up:[0xE0,0x48,0xE0,0xC8], Down:[0xE0,0x50,0xE0,0xD0], Left:[0xE0,0x4B,0xE0,0xCB], Right:[0xE0,0x4D,0xE0,0xCD] };
+const LETTER = {q:0x10,w:0x11,e:0x12,r:0x13,t:0x14,y:0x15,u:0x16,i:0x17,o:0x18,p:0x19,a:0x1E,s:0x1F,d:0x20,f:0x21,
+  g:0x22,h:0x23,j:0x24,k:0x25,l:0x26,z:0x2C,x:0x2D,c:0x2E,v:0x2F,b:0x30,n:0x31,m:0x32};
+let ctrl = false;
+
+function send(codes){ if (emu) emu.keyboard_send_scancodes(codes); }
+function typeText(t){
+  if (!emu || !t) return;
+  if (ctrl && t.length === 1 && LETTER[t.toLowerCase()]) {       // Ctrl+<letter>, e.g. Ctrl+C
+    const c = LETTER[t.toLowerCase()]; send([0x1D, c, c | 0x80, 0x9D]); setCtrl(false); return;
+  }
+  emu.keyboard_send_text(t);
+}
+function setCtrl(v){ ctrl = v; document.getElementById('bCtrl').classList.toggle('on', v); }
+function resetField(){ kb.value = SENTINEL; kb.setSelectionRange(SENTINEL.length, SENTINEL.length); }
+function showKeyboard(){ kb.focus(); resetField(); }
+
+// Tap/click the screen (or the button) -> focus the hidden field -> Quest keyboard pops up.
+// focus() must run inside the click handler (a user gesture) or the browser won't open the keyboard.
+document.getElementById('scr').addEventListener('click', showKeyboard);
+document.getElementById('bKb').addEventListener('click', showKeyboard);
+
+kb.addEventListener('focus', () => { if (emu) emu.keyboard_set_status(false); resetField(); }); // we feed keys ourselves
+kb.addEventListener('blur',  () => { if (emu) emu.keyboard_set_status(true); });                // physical keyboard works again
+
+// Characters, Backspace and Enter from the on-screen keyboard
+kb.addEventListener('beforeinput', e => {
+  if (e.inputType === 'deleteContentBackward') { send(SC.Backspace); e.preventDefault(); resetField(); }
+  else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') { send(SC.Enter); e.preventDefault(); resetField(); }
+  else if (e.inputType === 'insertText' || e.inputType === 'insertCompositionText' || e.inputType === 'insertFromPaste') {
+    if (e.data) typeText(e.data); e.preventDefault(); resetField();
+  }
+});
+// Fallback for keyboards that skip beforeinput: diff the field against the sentinel
+kb.addEventListener('input', () => {
+  const v = kb.value;
+  if (v !== SENTINEL) {
+    if (v.length < SENTINEL.length) send(SC.Backspace); else typeText(v.slice(SENTINEL.length) || v.replace(SENTINEL, ''));
+    resetField();
+  }
+});
+// Keys that arrive as real key events (Enter/Tab/arrows/Esc, and any plugged-in keyboard)
+kb.addEventListener('keydown', e => {
+  const map = { Enter:'Enter', Tab:'Tab', Escape:'Esc', ArrowUp:'Up', ArrowDown:'Down', ArrowLeft:'Left', ArrowRight:'Right', Backspace:'Backspace' };
+  if (map[e.key]) { send(SC[map[e.key]]); e.preventDefault(); }
+  else if (e.ctrlKey && e.key.length === 1 && LETTER[e.key.toLowerCase()]) { typeText(e.key); e.preventDefault(); }
+});
+
+// Extra keys bar
+[['bEsc','Esc'],['bTab','Tab'],['bUp','Up'],['bDn','Down'],['bLt','Left'],['bRt','Right']].forEach(([id,k]) =>
+  document.getElementById(id).addEventListener('click', () => { send(SC[k]); }));
+document.getElementById('bCtrl').addEventListener('click', () => setCtrl(!ctrl));
+
 (async () => {
   const msg = document.getElementById('msg');
   try {
     const m = await (await fetch('debian/manifest.json')).json();
-    const emu = new V86({
+    emu = new V86({
       wasm_path: 'v86/v86.wasm',
       memory_size: 512 * 1024 * 1024,
       vga_memory_size: 8 * 1024 * 1024,
@@ -28,7 +96,7 @@ html,body{margin:0;height:100%;background:#000;color:#ccc;font:14px monospace}
       cmdline: 'root=/dev/sda rw console=tty0',
       autostart: true
     });
-    emu.add_listener('emulator-ready', () => msg.textContent = 'Booting Debian 9… click the screen to type');
+    emu.add_listener('emulator-ready', () => msg.textContent = 'Booting Debian 9… tap the screen to open the keyboard');
     setTimeout(() => msg.style.display = 'none', 20000);
   } catch (e) { msg.textContent = 'Error: ' + e.message; }
 })();
